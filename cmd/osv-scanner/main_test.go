@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/osv-scanner/internal/version"
 )
 
 func createTestDir(t *testing.T) (string, func()) {
@@ -88,6 +90,34 @@ type cliTestCase struct {
 	wantStderr   string
 }
 
+func expectAreEqual(t *testing.T, subject, actual, expect string) {
+	t.Helper()
+
+	actual = dedent(t, actual)
+	expect = dedent(t, expect)
+
+	if !areEqual(t, actual, expect) {
+		if os.Getenv("TEST_NO_DIFF") == "true" {
+			t.Errorf("\nactual %s does not match expected:\n got:\n%s\n\n want:\n%s", subject, actual, expect)
+		} else {
+			t.Errorf("\nactual %s does not match expected:\n%s", subject, cmp.Diff(expect, actual))
+		}
+	}
+}
+
+// normalizeRootDirectory attempts to replace references to the current working
+// directory with "<rootdir>", in order to reduce the noise of the cmp diff
+func normalizeRootDirectory(t *testing.T, str string) string {
+	t.Helper()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Errorf("could not get cwd (%v) - results and diff might be inaccurate!", err)
+	}
+
+	return strings.ReplaceAll(str, cwd, "<rootdir>")
+}
+
 func testCli(t *testing.T, tc cliTestCase) {
 	t.Helper()
 
@@ -100,17 +130,15 @@ func testCli(t *testing.T, tc cliTestCase) {
 	stdout := stdoutBuffer.String()
 	stderr := stderrBuffer.String()
 
+	stdout = normalizeRootDirectory(t, stdout)
+	stderr = normalizeRootDirectory(t, stderr)
+
 	if ec != tc.wantExitCode {
 		t.Errorf("cli exited with code %d, not %d", ec, tc.wantExitCode)
 	}
 
-	if !areEqual(t, dedent(t, stdout), dedent(t, tc.wantStdout)) {
-		t.Errorf("stdout\n got:\n%s\n\n want:\n%s", dedent(t, stdout), dedent(t, tc.wantStdout))
-	}
-
-	if !areEqual(t, dedent(t, stderr), dedent(t, tc.wantStderr)) {
-		t.Errorf("stderr\n got:\n%s\n\n want:\n%s", dedent(t, stderr), dedent(t, tc.wantStderr))
-	}
+	expectAreEqual(t, "stdout output", stdout, tc.wantStdout)
+	expectAreEqual(t, "stderr output", stderr, tc.wantStderr)
 }
 
 func TestRun(t *testing.T) {
@@ -134,7 +162,7 @@ func TestRun(t *testing.T) {
 				osv-scanner version: %s
 				commit: n/a
 				built at: n/a
-			`, version),
+			`, version.OSVVersion),
 			wantStderr: "",
 		},
 		// one specific supported lockfile
@@ -144,20 +172,20 @@ func TestRun(t *testing.T) {
 			wantExitCode: 0,
 			wantStdout: `
 				Scanning dir ./fixtures/locks-many/composer.lock
-				Scanned %%/fixtures/locks-many/composer.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/composer.lock file and found 1 package
 				No vulnerabilities found
 			`,
 			wantStderr: "",
 		},
-		// one specific supported sbom with vulns
+		// folder of supported sbom with vulns
 		{
-			name:         "",
+			name:         "folder of supported sbom with vulns",
 			args:         []string{"", "--config=./fixtures/osv-scanner-empty-config.toml", "./fixtures/sbom-insecure/"},
 			wantExitCode: 1,
 			wantStdout: `
 				Scanning dir ./fixtures/sbom-insecure/
-				Scanned %%/fixtures/sbom-insecure/alpine.cdx.xml as CycloneDX SBOM and found 15 packages
-				Scanned %%/fixtures/sbom-insecure/postgres-stretch.cdx.xml as CycloneDX SBOM and found 136 packages
+				Scanned <rootdir>/fixtures/sbom-insecure/alpine.cdx.xml as CycloneDX SBOM and found 15 packages
+				Scanned <rootdir>/fixtures/sbom-insecure/postgres-stretch.cdx.xml as CycloneDX SBOM and found 136 packages
 				+-------------------------------------+------+-----------+--------------------------------+------------------------------------+-------------------------------------------------+
 				| OSV URL                             | CVSS | ECOSYSTEM | PACKAGE                        | VERSION                            | SOURCE                                          |
 				+-------------------------------------+------+-----------+--------------------------------+------------------------------------+-------------------------------------------------+
@@ -175,6 +203,21 @@ func TestRun(t *testing.T) {
 				| https://osv.dev/DLA-3008-1          |      | Debian    | openssl                        | 1.1.0l-1~deb9u5                    | fixtures/sbom-insecure/postgres-stretch.cdx.xml |
 				| https://osv.dev/DLA-3051-1          |      | Debian    | tzdata                         | 2021a-0+deb9u3                     | fixtures/sbom-insecure/postgres-stretch.cdx.xml |
 				+-------------------------------------+------+-----------+--------------------------------+------------------------------------+-------------------------------------------------+
+			`,
+			wantStderr: "",
+		},
+		// one specific supported sbom with vulns
+		{
+			name:         "one specific supported sbom with vulns",
+			args:         []string{"", "--config=./fixtures/osv-scanner-empty-config.toml", "--sbom", "./fixtures/sbom-insecure/alpine.cdx.xml"},
+			wantExitCode: 1,
+			wantStdout: `
+      	Scanned <rootdir>/fixtures/sbom-insecure/alpine.cdx.xml as CycloneDX SBOM and found 15 packages
+      	+--------------------------------+------+-----------+---------+-----------+---------------------------------------+
+      	| OSV URL                        | CVSS | ECOSYSTEM | PACKAGE | VERSION   | SOURCE                                |
+      	+--------------------------------+------+-----------+---------+-----------+---------------------------------------+
+      	| https://osv.dev/CVE-2022-37434 | 9.8  | Alpine    | zlib    | 1.2.10-r2 | fixtures/sbom-insecure/alpine.cdx.xml |
+      	+--------------------------------+------+-----------+---------+-----------+---------------------------------------+
 			`,
 			wantStderr: "",
 		},
@@ -197,12 +240,12 @@ func TestRun(t *testing.T) {
 			wantExitCode: 0,
 			wantStdout: `
 				Scanning dir ./fixtures/locks-many
-				Scanned %%/fixtures/locks-many/Gemfile.lock file and found 1 package
-				Scanned %%/fixtures/locks-many/alpine.cdx.xml as CycloneDX SBOM and found 15 packages
-				Scanned %%/fixtures/locks-many/composer.lock file and found 1 package
-				Scanned %%/fixtures/locks-many/package-lock.json file and found 1 package
-				Scanned %%/fixtures/locks-many/yarn.lock file and found 1 package
-				Loaded filter from: %%/fixtures/locks-many/osv-scanner.toml
+				Scanned <rootdir>/fixtures/locks-many/Gemfile.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/alpine.cdx.xml as CycloneDX SBOM and found 15 packages
+				Scanned <rootdir>/fixtures/locks-many/composer.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/package-lock.json file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/yarn.lock file and found 1 package
+				Loaded filter from: <rootdir>/fixtures/locks-many/osv-scanner.toml
 				GHSA-whgm-jr23-g3j9 has been filtered out because: Test manifest file
 				Filtered 1 vulnerability from output
 				No vulnerabilities found
@@ -216,11 +259,11 @@ func TestRun(t *testing.T) {
 			wantExitCode: 127,
 			wantStdout: `
 				Scanning dir ./fixtures/locks-many-with-invalid
-				Scanned %%/fixtures/locks-many-with-invalid/Gemfile.lock file and found 1 package
-				Scanned %%/fixtures/locks-many-with-invalid/yarn.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many-with-invalid/Gemfile.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many-with-invalid/yarn.lock file and found 1 package
 			`,
 			wantStderr: `
-				Attempted to scan lockfile but failed: %%/fixtures/locks-many-with-invalid/composer.lock
+				Attempted to scan lockfile but failed: <rootdir>/fixtures/locks-many-with-invalid/composer.lock
 			`,
 		},
 		// only the files in the given directories are checked by default (no recursion)
@@ -230,7 +273,7 @@ func TestRun(t *testing.T) {
 			wantExitCode: 0,
 			wantStdout: `
 				Scanning dir ./fixtures/locks-one-with-nested
-				Scanned %%/fixtures/locks-one-with-nested/yarn.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-one-with-nested/yarn.lock file and found 1 package
 				No vulnerabilities found
 			`,
 			wantStderr: "",
@@ -242,8 +285,8 @@ func TestRun(t *testing.T) {
 			wantExitCode: 0,
 			wantStdout: `
 				Scanning dir ./fixtures/locks-one-with-nested
-				Scanned %%/fixtures/locks-one-with-nested/nested/composer.lock file and found 1 package
-				Scanned %%/fixtures/locks-one-with-nested/yarn.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-one-with-nested/nested/composer.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-one-with-nested/yarn.lock file and found 1 package
 				No vulnerabilities found
 			`,
 			wantStderr: "",
@@ -255,8 +298,8 @@ func TestRun(t *testing.T) {
 			wantExitCode: 0,
 			wantStdout: `
 				Scanning dir ./fixtures/locks-gitignore
-				Scanned %%/fixtures/locks-gitignore/Gemfile.lock file and found 1 package
-				Scanned %%/fixtures/locks-gitignore/subdir/yarn.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/Gemfile.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/subdir/yarn.lock file and found 1 package
 				No vulnerabilities found
 			`,
 			wantStderr: "",
@@ -268,14 +311,14 @@ func TestRun(t *testing.T) {
 			wantExitCode: 0,
 			wantStdout: `
 				Scanning dir ./fixtures/locks-gitignore
-				Scanned %%/fixtures/locks-gitignore/Gemfile.lock file and found 1 package
-				Scanned %%/fixtures/locks-gitignore/composer.lock file and found 1 package
-				Scanned %%/fixtures/locks-gitignore/ignored/Gemfile.lock file and found 1 package
-				Scanned %%/fixtures/locks-gitignore/ignored/yarn.lock file and found 1 package
-				Scanned %%/fixtures/locks-gitignore/subdir/Gemfile.lock file and found 1 package
-				Scanned %%/fixtures/locks-gitignore/subdir/composer.lock file and found 1 package
-				Scanned %%/fixtures/locks-gitignore/subdir/yarn.lock file and found 1 package
-				Scanned %%/fixtures/locks-gitignore/yarn.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/Gemfile.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/composer.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/ignored/Gemfile.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/ignored/yarn.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/subdir/Gemfile.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/subdir/composer.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/subdir/yarn.lock file and found 1 package
+        Scanned <rootdir>/fixtures/locks-gitignore/yarn.lock file and found 1 package
 				No vulnerabilities found
 			`,
 			wantStderr: "",
@@ -292,7 +335,7 @@ func TestRun(t *testing.T) {
 			`,
 			wantStderr: `
 				Scanning dir ./fixtures/locks-many/composer.lock
-				Scanned %%/fixtures/locks-many/composer.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/composer.lock file and found 1 package
 			`,
 		},
 		{
@@ -306,7 +349,7 @@ func TestRun(t *testing.T) {
 			`,
 			wantStderr: `
 				Scanning dir ./fixtures/locks-many/composer.lock
-				Scanned %%/fixtures/locks-many/composer.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/composer.lock file and found 1 package
 			`,
 		},
 		// output format: sarif
@@ -314,107 +357,148 @@ func TestRun(t *testing.T) {
 			name:         "Empty sarif output",
 			args:         []string{"", "--format", "sarif", "./fixtures/locks-many/composer.lock"},
 			wantExitCode: 0,
-			wantStdout: `
-				{
-					"version": "2.1.0",
-					"$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-					"runs": [
-						{
-							"tool": {
-								"driver": {
-									"informationUri": "https://github.com/google/osv-scanner",
-									"name": "osv-scanner",
-									"rules": [
-										{
-											"id": "vulnerable-packages",
-											"shortDescription": {
-												"text": "This manifest file contains one or more vulnerable packages."
-											}
-										}
-									]
-								}
-							},
-							"results": []
-						}
-					]
-				}
-			`,
+			wantStdout: fmt.Sprintf(`
+            {
+              "version": "2.1.0",
+              "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+              "runs": [
+                {
+                  "tool": {
+                    "driver": {
+                      "informationUri": "https://github.com/google/osv-scanner",
+                      "name": "osv-scanner",
+                      "rules": [],
+                      "version": "%s"
+                    }
+                  },
+                  "results": []
+                }
+              ]
+            }
+			`, version.OSVVersion),
 			wantStderr: `
 				Scanning dir ./fixtures/locks-many/composer.lock
-				Scanned %%/fixtures/locks-many/composer.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/composer.lock file and found 1 package
 			`,
 		},
 		{
 			name:         "Sarif with vulns",
 			args:         []string{"", "--format", "sarif", "--config", "./fixtures/osv-scanner-empty-config.toml", "./fixtures/locks-many/package-lock.json"},
 			wantExitCode: 1,
-			wantStdout: `
-				{
-					"version": "2.1.0",
-					"$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-					"runs": [
+			wantStdout: fmt.Sprint(`
 						{
-							"tool": {
-								"driver": {
-									"informationUri": "https://github.com/google/osv-scanner",
-									"name": "osv-scanner",
-									"rules": [
-										{
-											"id": "vulnerable-packages",
-											"shortDescription": {
-												"text": "This manifest file contains one or more vulnerable packages."
-											}
-										}
-									]
-								}
-							},
-							"artifacts": [
-								{
-									"location": {
-										"uri": "fixtures/locks-many/package-lock.json"
-									},
-									"length": -1
-								}
-							],
-							"results": [
-								{
-									"ruleId": "vulnerable-packages",
-									"ruleIndex": 0,
-									"level": "warning",
-									"message": {
-										"text": "+-----------+-------------------------------------+------+-----------------+---------------+\n| PACKAGE \u0026nbsp; | VULNERABILITY ID \u0026nbsp; \u0026nbsp; \u0026nbsp; \u0026nbsp; \u0026nbsp; \u0026nbsp; \u0026nbsp; \u0026nbsp; \u0026nbsp; \u0026nbsp;| CVSS | CURRENT VERSION | FIXED VERSION |\n+-----------+-------------------------------------+------+-----------------+---------------+\n| ansi-html | https://osv.dev/GHSA-whgm-jr23-g3j9 | 7.5 \u0026nbsp;| 0.0.1 \u0026nbsp; \u0026nbsp; \u0026nbsp; \u0026nbsp; \u0026nbsp; | 0.0.8 \u0026nbsp; \u0026nbsp; \u0026nbsp; \u0026nbsp; |\n+-----------+-------------------------------------+------+-----------------+---------------+"
-									},
-									"locations": [
-										{
-											"physicalLocation": {
-												"artifactLocation": {
-													"uri": "fixtures/locks-many/package-lock.json"
-												}
-											}
-										}
-									]
-								}
-							]
-						}
-					]
-				}
-			`,
+              "version": "2.1.0",
+              "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+              "runs": [
+                {
+                  "tool": {
+                    "driver": {
+                      "informationUri": "https://github.com/google/osv-scanner",
+                      "name": "osv-scanner",
+                      "rules": [
+                        {
+                          "id": "CVE-2021-23424",
+                          "shortDescription": {
+                            "text": "CVE-2021-23424: Uncontrolled Resource Consumption in ansi-html"
+                          },
+                          "fullDescription": {
+                            "text": "This affects all versions of package ansi-html. If an attacker provides a malicious string, it will get stuck processing the input for an extremely long time.",
+                            "markdown": "This affects all versions of package ansi-html. If an attacker provides a malicious string, it will get stuck processing the input for an extremely long time."
+                          },
+                          "deprecatedIds": [
+                            "CVE-2021-23424",
+                            "GHSA-whgm-jr23-g3j9"
+                          ],
+                          "help": {
+                            "text": "%%",
+                            "markdown": "%%"
+                          }
+                        }
+                      ],
+                      "version": "`, version.OSVVersion, `"
+                    }
+                  },
+                  "artifacts": [
+                    {
+                      "location": {
+                        "uri": "file://<rootdir>/fixtures/locks-many/package-lock.json"
+                      },
+                      "length": -1
+                    }
+                  ],
+                  "results": [
+                    {
+                      "ruleId": "CVE-2021-23424",
+                      "ruleIndex": 0,
+                      "level": "warning",
+                      "message": {
+                        "text": "Package 'ansi-html@0.0.1' is vulnerable to 'CVE-2021-23424' (also known as 'GHSA-whgm-jr23-g3j9')."
+                      },
+                      "locations": [
+                        {
+                          "physicalLocation": {
+                            "artifactLocation": {
+                              "uri": "file://<rootdir>/fixtures/locks-many/package-lock.json"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+			`),
 			wantStderr: `
 				Scanning dir ./fixtures/locks-many/package-lock.json
-				Scanned %%/fixtures/locks-many/package-lock.json file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/package-lock.json file and found 1 package
+			`,
+		},
+		// output format: gh-annotations
+		{
+			name:         "Empty gh-annotations output",
+			args:         []string{"", "--format", "gh-annotations", "./fixtures/locks-many/composer.lock"},
+			wantExitCode: 0,
+			wantStdout:   ``,
+			wantStderr: `
+				Scanning dir ./fixtures/locks-many/composer.lock
+				Scanned <rootdir>/fixtures/locks-many/composer.lock file and found 1 package
+			`,
+		},
+		{
+			name:         "gh-annotations with vulns",
+			args:         []string{"", "--format", "gh-annotations", "--config", "./fixtures/osv-scanner-empty-config.toml", "./fixtures/locks-many/package-lock.json"},
+			wantExitCode: 1,
+			wantStdout:   ``,
+			wantStderr: `
+				Scanning dir ./fixtures/locks-many/package-lock.json
+				Scanned <rootdir>/fixtures/locks-many/package-lock.json file and found 1 package
+				::error file=fixtures/locks-many/package-lock.json::fixtures/locks-many/package-lock.json%0A+-----------+-------------------------------------+------+-----------------+---------------+%0A| PACKAGE   | VULNERABILITY ID                    | CVSS | CURRENT VERSION | FIXED VERSION |%0A+-----------+-------------------------------------+------+-----------------+---------------+%0A| ansi-html | https://osv.dev/GHSA-whgm-jr23-g3j9 | 7.5  | 0.0.1           | 0.0.8         |%0A+-----------+-------------------------------------+------+-----------------+---------------+
 			`,
 		},
 		// output format: markdown table
 		{
 			name:         "",
-			args:         []string{"", "--format", "markdown", "./fixtures/locks-many/composer.lock"},
-			wantExitCode: 0,
+			args:         []string{"", "--format", "markdown", "--config", "./fixtures/osv-scanner-empty-config.toml", "./fixtures/locks-many/package-lock.json"},
+			wantExitCode: 1,
 			wantStdout: `
-				Scanning dir ./fixtures/locks-many/composer.lock
-				Scanned %%/fixtures/locks-many/composer.lock file and found 1 package
-				No vulnerabilities found
+				Scanning dir ./fixtures/locks-many/package-lock.json
+        Scanned <rootdir>/fixtures/locks-many/package-lock.json file and found 1 package
+        | OSV URL | CVSS | Ecosystem | Package | Version | Source |
+        | --- | --- | --- | --- | --- | --- |
+        | https://osv.dev/GHSA-whgm-jr23-g3j9 | 7.5 | npm | ansi-html | 0.0.1 | fixtures/locks-many/package-lock.json |
 			`,
 			wantStderr: "",
+		},
+		// output format: unsupported
+		{
+			name:         "",
+			args:         []string{"", "--format", "unknown", "./fixtures/locks-many/composer.lock"},
+			wantExitCode: 127,
+			wantStdout:   "",
+			wantStderr: `
+				unsupported output format "unknown" - must be one of: table, json, markdown, sarif, gh-annotations
+			`,
 		},
 	}
 	for _, tt := range tests {
@@ -451,7 +535,7 @@ func TestRun_LockfileWithExplicitParseAs(t *testing.T) {
 			},
 			wantExitCode: 0,
 			wantStdout: `
-				Scanned %%/fixtures/locks-many/composer.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/composer.lock file and found 1 package
 				No vulnerabilities found
 			`,
 			wantStderr: "",
@@ -467,7 +551,7 @@ func TestRun_LockfileWithExplicitParseAs(t *testing.T) {
 			wantExitCode: 127,
 			wantStdout:   "",
 			wantStderr: `
-				open %%/path/to/my:file: no such file or directory
+				open <rootdir>/path/to/my:file: no such file or directory
 			`,
 		},
 		{
@@ -480,7 +564,7 @@ func TestRun_LockfileWithExplicitParseAs(t *testing.T) {
 			wantExitCode: 127,
 			wantStdout:   "",
 			wantStderr: `
-				open %%/path/to/my:project/package-lock.json: no such file or directory
+				open <rootdir>/path/to/my:project/package-lock.json: no such file or directory
 			`,
 		},
 		// when an explicit parse-as is given, it's applied to that file
@@ -494,9 +578,9 @@ func TestRun_LockfileWithExplicitParseAs(t *testing.T) {
 			},
 			wantExitCode: 1,
 			wantStdout: `
-				Scanned %%/fixtures/locks-insecure/my-package-lock.json file as a package-lock.json and found 1 package
+				Scanned <rootdir>/fixtures/locks-insecure/my-package-lock.json file as a package-lock.json and found 1 package
 				Scanning dir ./fixtures/locks-insecure
-				Scanned %%/fixtures/locks-insecure/composer.lock file and found 0 packages
+				Scanned <rootdir>/fixtures/locks-insecure/composer.lock file and found 0 packages
 				+-------------------------------------+------+-----------+-----------+---------+----------------------------------------------+
 				| OSV URL                             | CVSS | ECOSYSTEM | PACKAGE   | VERSION | SOURCE                                       |
 				+-------------------------------------+------+-----------+-----------+---------+----------------------------------------------+
@@ -516,10 +600,10 @@ func TestRun_LockfileWithExplicitParseAs(t *testing.T) {
 			},
 			wantExitCode: 1,
 			wantStdout: `
-				Scanned %%/fixtures/locks-insecure/my-package-lock.json file as a package-lock.json and found 1 package
-				Scanned %%/fixtures/locks-insecure/my-yarn.lock file as a yarn.lock and found 1 package
+				Scanned <rootdir>/fixtures/locks-insecure/my-package-lock.json file as a package-lock.json and found 1 package
+				Scanned <rootdir>/fixtures/locks-insecure/my-yarn.lock file as a yarn.lock and found 1 package
 				Scanning dir ./fixtures/locks-insecure
-				Scanned %%/fixtures/locks-insecure/composer.lock file and found 0 packages
+				Scanned <rootdir>/fixtures/locks-insecure/composer.lock file and found 0 packages
 				+-------------------------------------+------+-----------+-----------+---------+----------------------------------------------+
 				| OSV URL                             | CVSS | ECOSYSTEM | PACKAGE   | VERSION | SOURCE                                       |
 				+-------------------------------------+------+-----------+-----------+---------+----------------------------------------------+
@@ -539,10 +623,10 @@ func TestRun_LockfileWithExplicitParseAs(t *testing.T) {
 			},
 			wantExitCode: 1,
 			wantStdout: `
-				Scanned %%/fixtures/locks-insecure/my-yarn.lock file as a yarn.lock and found 1 package
-				Scanned %%/fixtures/locks-insecure/my-package-lock.json file as a package-lock.json and found 1 package
+				Scanned <rootdir>/fixtures/locks-insecure/my-yarn.lock file as a yarn.lock and found 1 package
+				Scanned <rootdir>/fixtures/locks-insecure/my-package-lock.json file as a package-lock.json and found 1 package
 				Scanning dir ./fixtures/locks-insecure
-				Scanned %%/fixtures/locks-insecure/composer.lock file and found 0 packages
+				Scanned <rootdir>/fixtures/locks-insecure/composer.lock file and found 0 packages
 				+-------------------------------------+------+-----------+-----------+---------+----------------------------------------------+
 				| OSV URL                             | CVSS | ECOSYSTEM | PACKAGE   | VERSION | SOURCE                                       |
 				+-------------------------------------+------+-----------+-----------+---------+----------------------------------------------+
@@ -565,7 +649,7 @@ func TestRun_LockfileWithExplicitParseAs(t *testing.T) {
 			wantExitCode: 127,
 			wantStdout:   "",
 			wantStderr: `
-				(extracting as Cargo.lock) could not extract from %%/fixtures/locks-insecure/my-package-lock.json: toml: line 1: expected '.' or '=', but got '{' instead
+				(extracting as Cargo.lock) could not extract from <rootdir>/fixtures/locks-insecure/my-package-lock.json: toml: line 1: expected '.' or '=', but got '{' instead
 			`,
 		},
 		// parse-as takes priority, even if it's wrong
@@ -579,7 +663,7 @@ func TestRun_LockfileWithExplicitParseAs(t *testing.T) {
 			wantExitCode: 127,
 			wantStdout:   "",
 			wantStderr: `
-				(extracting as package-lock.json) could not extract from %%/fixtures/locks-many/yarn.lock: invalid character '#' looking for beginning of value
+				(extracting as package-lock.json) could not extract from <rootdir>/fixtures/locks-many/yarn.lock: invalid character '#' looking for beginning of value
 			`,
 		},
 		// "apk-installed" is supported
@@ -592,7 +676,7 @@ func TestRun_LockfileWithExplicitParseAs(t *testing.T) {
 			},
 			wantExitCode: 0,
 			wantStdout: `
-				Scanned %%/fixtures/locks-many/installed file as a apk-installed and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/installed file as a apk-installed and found 1 package
 				No vulnerabilities found
 			`,
 			wantStderr: "",
@@ -607,7 +691,7 @@ func TestRun_LockfileWithExplicitParseAs(t *testing.T) {
 			},
 			wantExitCode: 0,
 			wantStdout: `
-				Scanned %%/fixtures/locks-many/status file as a dpkg-status and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/status file as a dpkg-status and found 1 package
 				No vulnerabilities found
 			`,
 			wantStderr: "",
@@ -634,7 +718,7 @@ func TestRun_LocalDatabases(t *testing.T) {
 			wantExitCode: 0,
 			wantStdout: `
 				Scanning dir ./fixtures/locks-many/composer.lock
-				Scanned %%/fixtures/locks-many/composer.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/composer.lock file and found 1 package
 				Loaded Packagist local db from %%/osv-scanner/Packagist/all.zip
 				No vulnerabilities found
 			`,
@@ -647,7 +731,7 @@ func TestRun_LocalDatabases(t *testing.T) {
 			wantExitCode: 1,
 			wantStdout: `
 				Scanning dir ./fixtures/sbom-insecure/postgres-stretch.cdx.xml
-				Scanned %%/fixtures/sbom-insecure/postgres-stretch.cdx.xml as CycloneDX SBOM and found 136 packages
+				Scanned <rootdir>/fixtures/sbom-insecure/postgres-stretch.cdx.xml as CycloneDX SBOM and found 136 packages
 				Loaded Debian local db from %%/osv-scanner/Debian/all.zip
 				Loaded Go local db from %%/osv-scanner/Go/all.zip
 				Loaded OSS-Fuzz local db from %%/osv-scanner/OSS-Fuzz/all.zip
@@ -683,16 +767,16 @@ func TestRun_LocalDatabases(t *testing.T) {
 			wantExitCode: 0,
 			wantStdout: `
 				Scanning dir ./fixtures/locks-many
-				Scanned %%/fixtures/locks-many/Gemfile.lock file and found 1 package
-				Scanned %%/fixtures/locks-many/alpine.cdx.xml as CycloneDX SBOM and found 15 packages
-				Scanned %%/fixtures/locks-many/composer.lock file and found 1 package
-				Scanned %%/fixtures/locks-many/package-lock.json file and found 1 package
-				Scanned %%/fixtures/locks-many/yarn.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/Gemfile.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/alpine.cdx.xml as CycloneDX SBOM and found 15 packages
+				Scanned <rootdir>/fixtures/locks-many/composer.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/package-lock.json file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/yarn.lock file and found 1 package
 				Loaded RubyGems local db from %%/osv-scanner/RubyGems/all.zip
 				Loaded Alpine local db from %%/osv-scanner/Alpine/all.zip
 				Loaded Packagist local db from %%/osv-scanner/Packagist/all.zip
 				Loaded npm local db from %%/osv-scanner/npm/all.zip
-				Loaded filter from: %%/fixtures/locks-many/osv-scanner.toml
+				Loaded filter from: <rootdir>/fixtures/locks-many/osv-scanner.toml
 				GHSA-whgm-jr23-g3j9 has been filtered out because: Test manifest file
 				Filtered 1 vulnerability from output
 				No vulnerabilities found
@@ -706,13 +790,13 @@ func TestRun_LocalDatabases(t *testing.T) {
 			wantExitCode: 127,
 			wantStdout: `
 				Scanning dir ./fixtures/locks-many-with-invalid
-				Scanned %%/fixtures/locks-many-with-invalid/Gemfile.lock file and found 1 package
-				Scanned %%/fixtures/locks-many-with-invalid/yarn.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many-with-invalid/Gemfile.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many-with-invalid/yarn.lock file and found 1 package
 				Loaded RubyGems local db from %%/osv-scanner/RubyGems/all.zip
 				Loaded npm local db from %%/osv-scanner/npm/all.zip
 			`,
 			wantStderr: `
-				Attempted to scan lockfile but failed: %%/fixtures/locks-many-with-invalid/composer.lock
+				Attempted to scan lockfile but failed: <rootdir>/fixtures/locks-many-with-invalid/composer.lock
 			`,
 		},
 		// only the files in the given directories are checked by default (no recursion)
@@ -722,7 +806,7 @@ func TestRun_LocalDatabases(t *testing.T) {
 			wantExitCode: 0,
 			wantStdout: `
 				Scanning dir ./fixtures/locks-one-with-nested
-				Scanned %%/fixtures/locks-one-with-nested/yarn.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-one-with-nested/yarn.lock file and found 1 package
 				Loaded npm local db from %%/osv-scanner/npm/all.zip
 				No vulnerabilities found
 			`,
@@ -735,8 +819,8 @@ func TestRun_LocalDatabases(t *testing.T) {
 			wantExitCode: 0,
 			wantStdout: `
 				Scanning dir ./fixtures/locks-one-with-nested
-				Scanned %%/fixtures/locks-one-with-nested/nested/composer.lock file and found 1 package
-				Scanned %%/fixtures/locks-one-with-nested/yarn.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-one-with-nested/nested/composer.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-one-with-nested/yarn.lock file and found 1 package
 				Loaded Packagist local db from %%/osv-scanner/Packagist/all.zip
 				Loaded npm local db from %%/osv-scanner/npm/all.zip
 				No vulnerabilities found
@@ -750,8 +834,8 @@ func TestRun_LocalDatabases(t *testing.T) {
 			wantExitCode: 0,
 			wantStdout: `
 				Scanning dir ./fixtures/locks-gitignore
-				Scanned %%/fixtures/locks-gitignore/Gemfile.lock file and found 1 package
-				Scanned %%/fixtures/locks-gitignore/subdir/yarn.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/Gemfile.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/subdir/yarn.lock file and found 1 package
 				Loaded RubyGems local db from %%/osv-scanner/RubyGems/all.zip
 				Loaded npm local db from %%/osv-scanner/npm/all.zip
 				No vulnerabilities found
@@ -765,14 +849,14 @@ func TestRun_LocalDatabases(t *testing.T) {
 			wantExitCode: 0,
 			wantStdout: `
 				Scanning dir ./fixtures/locks-gitignore
-				Scanned %%/fixtures/locks-gitignore/Gemfile.lock file and found 1 package
-				Scanned %%/fixtures/locks-gitignore/composer.lock file and found 1 package
-				Scanned %%/fixtures/locks-gitignore/ignored/Gemfile.lock file and found 1 package
-				Scanned %%/fixtures/locks-gitignore/ignored/yarn.lock file and found 1 package
-				Scanned %%/fixtures/locks-gitignore/subdir/Gemfile.lock file and found 1 package
-				Scanned %%/fixtures/locks-gitignore/subdir/composer.lock file and found 1 package
-				Scanned %%/fixtures/locks-gitignore/subdir/yarn.lock file and found 1 package
-				Scanned %%/fixtures/locks-gitignore/yarn.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/Gemfile.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/composer.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/ignored/Gemfile.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/ignored/yarn.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/subdir/Gemfile.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/subdir/composer.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/subdir/yarn.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-gitignore/yarn.lock file and found 1 package
 				Loaded RubyGems local db from %%/osv-scanner/RubyGems/all.zip
 				Loaded Packagist local db from %%/osv-scanner/Packagist/all.zip
 				Loaded npm local db from %%/osv-scanner/npm/all.zip
@@ -792,7 +876,7 @@ func TestRun_LocalDatabases(t *testing.T) {
 			`,
 			wantStderr: `
 				Scanning dir ./fixtures/locks-many/composer.lock
-				Scanned %%/fixtures/locks-many/composer.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/composer.lock file and found 1 package
 				Loaded Packagist local db from %%/osv-scanner/Packagist/all.zip
 			`,
 		},
@@ -807,7 +891,7 @@ func TestRun_LocalDatabases(t *testing.T) {
 			`,
 			wantStderr: `
 				Scanning dir ./fixtures/locks-many/composer.lock
-				Scanned %%/fixtures/locks-many/composer.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/composer.lock file and found 1 package
 				Loaded Packagist local db from %%/osv-scanner/Packagist/all.zip
 			`,
 		},
@@ -818,7 +902,7 @@ func TestRun_LocalDatabases(t *testing.T) {
 			wantExitCode: 0,
 			wantStdout: `
 				Scanning dir ./fixtures/locks-many/composer.lock
-				Scanned %%/fixtures/locks-many/composer.lock file and found 1 package
+				Scanned <rootdir>/fixtures/locks-many/composer.lock file and found 1 package
 				Loaded Packagist local db from %%/osv-scanner/Packagist/all.zip
 				No vulnerabilities found
 			`,

@@ -1,3 +1,14 @@
+# v1.4.1:
+
+### Features
+- [Feature #534](https://github.com/google/osv-scanner/pull/534)
+  New SARIF format that separates out individual vulnerabilities, see https://github.com/google/osv-scanner/issue/216
+- [Experimental Feature #57](https://github.com/google/osv-scanner/issues/57) Experimental Github Action!
+  Have a look at https://google.github.io/osv-scanner/experimental/ for how to use the new Github Action in your repo.
+  Experimental, so might change with only a minor update.
+
+### API Features
+- [Feature #557](https://github.com/google/osv-scanner/pull/557) Add new ecosystems, and a slice containing all of them.
 
 # v1.4.0:
 
@@ -22,7 +33,7 @@
 
 ### Minor Updates
 - [Feature #431](https://github.com/google/osv-scanner/pull/431)
-  Update GoVulnCheck integration. 
+  Update GoVulnCheck integration.
 - [Feature #439](https://github.com/google/osv-scanner/pull/439)
   Create `models.PURLToPackage()`, and deprecate `osvscanner.PURLToPackage()`.
 
@@ -35,7 +46,7 @@
 # v1.3.5:
 
 ### Features
-- [Feature #409](https://github.com/google/osv-scanner/pull/409) 
+- [Feature #409](https://github.com/google/osv-scanner/pull/409)
   Adds an additional column to the table output which shows the severity if available.
 
 ### API Features
